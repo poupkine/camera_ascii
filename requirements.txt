@@ -1,0 +1,16 @@
+# ASCII Camera Pro — Real-time ASCII art from camera
+# Works on Android (Pydroid 3) and desktop (Windows/macOS/Linux)
+
+# Core dependencies
+opencv-python>=4.5.0      # Camera capture and image processing
+numpy>=1.20.0             # Numerical operations
+Pillow>=8.0.0             # Image loading/resizing (PIL fork)
+PySide6>=6.4.0            # GUI: buttons, sliders, real-time rendering
+
+# Optional: PDF export (install manually in Pydroid if needed)
+# fpdf2>=2.7.0            # Vector PDF export (uncomment to require)
+
+# Notes:
+# - On Android (Pydroid 3), use "fpdf2" via pip in-app if PDF export is needed.
+# - For minimal install (PNG/JPG/TXT only), fpdf2 is optional.
+# - opencv-python may be replaced with opencv-python-headless on headless servers (not recommended for camera apps).
