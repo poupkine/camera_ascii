@@ -9,15 +9,11 @@ from PySide6 import QtCore, QtWidgets, QtGui
 
 
 # ══════════════════════════════════════════════════════════════
-# 🔧 CONFIGURATION & ASCII CHAR SETS
-# ══════════════════════════════════════════════════════════════
-
-# Char sets for different styles
 CHAR_SETS = {
     "Detailed": " .'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$",
     "Newspaper": "@#%+=-:. ",
-    "Block": "█▒░ ",  # Unicode block elements
-    "Dot": ".",        # ← NEW: ONLY DOT MODE
+    "Block": "█▒░ ",
+    "Dot": ".",
 }
 
 DEFAULTS = {
@@ -41,7 +37,7 @@ class ASCIIRenderer:
     def __init__(self):
         self.chars = None
         self.n = 0
-        self.mode = "normal"  # "normal" or "dot"
+        self.mode = "normal"
 
     def set_chars(self, char_string):
         if char_string == ".":
@@ -68,10 +64,7 @@ class ASCIIRenderer:
             gray = np.clip(128 + (gray - 128) * contrast, 0, 255)
 
         if self.mode == "dot":
-            # Dot mode: always '.', but brightness = gray
             symbols = np.full(gray.shape, '.', dtype='<U1')
-            # Colors: use original color (if color mode) OR grayscale (val, val, val)
-            # Gray is used for alpha/intensity simulation (via brightness)
             return symbols, img.astype(np.uint8), gray.astype(np.uint8)
         else:
             indices = np.clip((gray / 255.0) * (self.n - 1), 0, self.n - 1).astype(int)
@@ -85,17 +78,18 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         self.renderer = ASCIIRenderer()
         self.renderer.set_chars(CHAR_SETS[DEFAULTS['char_set']])
 
-        # Parameters
-        self.ascii_w = DEFAULTS['width']
-        self.ascii_h = DEFAULTS['height']
-        self.contrast = DEFAULTS['contrast']
-        self.font_size = DEFAULTS['font_size']
-        self.use_color = DEFAULTS['use_color']
-        self.invert = DEFAULTS['invert']
-        self.auto_contrast = DEFAULTS['auto_contrast']
-        self.char_set_name = DEFAULTS['char_set']
+        # ВСЕ параметры хранятся ВНУТРИ и обновляются напрямую
+        self.params = {
+            'ascii_w': DEFAULTS['width'],
+            'ascii_h': DEFAULTS['height'],
+            'contrast': DEFAULTS['contrast'],
+            'font_size': DEFAULTS['font_size'],
+            'use_color': DEFAULTS['use_color'],
+            'invert': DEFAULTS['invert'],
+            'auto_contrast': DEFAULTS['auto_contrast'],
+            'char_set_name': DEFAULTS['char_set'],
+        }
 
-        # Metrics cache
         self.char_w = 8
         self.line_h = 14
         self.ascii_symbols = None
@@ -104,43 +98,66 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         self.last_frame_time = time.time()
         self.fps = 0.0
 
-        # Camera
         self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
         self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
         self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
 
-        # Timer
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_frame)
-        self.timer.start(30)
+        self.timer.start(40)
 
-    def update_params(self, **kwargs):
+        self.update_metrics()
+
+    def update_params(self,
+                      ascii_w=None, ascii_h=None, contrast=None,
+                      font_size=None, use_color=None, invert=None,
+                      auto_contrast=None, char_set_name=None):
+        # Обновляем параметры поименно
         changed = False
         redraw_needed = False
 
-        for k, v in kwargs.items():
-            if hasattr(self, k):
-                old = getattr(self, k)
-                if old != v:
-                    setattr(self, k, v)
-                    changed = True
-                    if k in ('char_set_name',):
-                        redraw_needed = True
-
-        if 'char_set_name' in kwargs:
-            self.renderer.set_chars(CHAR_SETS[kwargs['char_set_name']])
+        if ascii_w is not None and self.params['ascii_w'] != ascii_w:
+            self.params['ascii_w'] = ascii_w
+            changed = True
+        if ascii_h is not None and self.params['ascii_h'] != ascii_h:
+            self.params['ascii_h'] = ascii_h
+            changed = True
+        if contrast is not None and abs(self.params['contrast'] - contrast) > 1e-3:
+            self.params['contrast'] = contrast
+            changed = True
+        if font_size is not None and self.params['font_size'] != font_size:
+            self.params['font_size'] = font_size
+            changed = True
+        if use_color is not None and self.params['use_color'] != use_color:
+            self.params['use_color'] = use_color
+            changed = True
+        if invert is not None and self.params['invert'] != invert:
+            self.params['invert'] = invert
+            changed = True
+        if auto_contrast is not None and self.params['auto_contrast'] != auto_contrast:
+            self.params['auto_contrast'] = auto_contrast
+            changed = True
+        if char_set_name is not None and self.params['char_set_name'] != char_set_name:
+            self.params['char_set_name'] = char_set_name
+            self.renderer.set_chars(CHAR_SETS[char_set_name])
+            redraw_needed = True
+            changed = True
 
         if changed:
             self.update_metrics()
+            # Принудительно обновляем кадр в следующем цикле
         if redraw_needed:
-            self.update()
+            self.update()  # немедленная перерисовка UI
+
+        # Debug (можно закомментировать)
+        # print("Params updated:", {k: v for k, v in locals().items() if k != 'self' and v is not None})
 
     def update_metrics(self):
-        font = QtGui.QFont("Courier New", self.font_size)
+        font = QtGui.QFont("Courier New", self.params['font_size'])
         fm = QtGui.QFontMetrics(font)
-        self.char_w = fm.horizontalAdvance("W")
+        self.char_w = fm.horizontalAdvance("W") or 8
         self.line_h = fm.height() + 2
         self.update()
 
@@ -157,9 +174,10 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         try:
             symbols, colors, gray = self.renderer.render(
                 frame_rgb,
-                self.ascii_w, self.ascii_h,
-                self.contrast,
-                self.auto_contrast
+                self.params['ascii_w'],
+                self.params['ascii_h'],
+                self.params['contrast'],
+                self.params['auto_contrast']
             )
             self.ascii_symbols = symbols
             self.colors = colors
@@ -173,11 +191,11 @@ class ASCIICameraWidget(QtWidgets.QWidget):
             return
 
         painter = QtGui.QPainter(self)
-        font = QtGui.QFont("Courier New", self.font_size)
+        font = QtGui.QFont("Courier New", self.params['font_size'])
         painter.setFont(font)
         painter.setRenderHint(QtGui.QPainter.TextAntialiasing, False)
 
-        bg = QtCore.Qt.white if self.invert else QtCore.Qt.black
+        bg = QtCore.Qt.white if self.params['invert'] else QtCore.Qt.black
         painter.fillRect(self.rect(), bg)
 
         H, W = self.ascii_symbols.shape
@@ -185,39 +203,33 @@ class ASCIICameraWidget(QtWidgets.QWidget):
             for x in range(W):
                 ch = self.ascii_symbols[y, x]
 
-                # Color logic
-                if self.use_color:
-                    color_arr = self.colors[y, x]  # (R, G, B)
+                if self.params['use_color']:
+                    color_arr = self.colors[y, x]
                 else:
                     val = int(self.gray[y, x])
                     color_arr = (val, val, val)
 
                 r, g, b = color_arr
 
-                # 🔹 Dot mode: modulate brightness by gray value
-                if self.char_set_name == "Dot":
-                    # Simulate "transparency" via brightness:
-                    # — dark gray → dark dot
-                    # — light gray → light dot (almost invisible on black bg)
+                # Dot mode brightness modulation
+                if self.params['char_set_name'] == "Dot":
                     brightness = self.gray[y, x] / 255.0
-                    if self.invert:
-                        # On white bg: dark dots should be dark, light → gray
+                    if self.params['invert']:
                         r = int(r * (1 - brightness) + 255 * brightness)
                         g = int(g * (1 - brightness) + 255 * brightness)
                         b = int(b * (1 - brightness) + 255 * brightness)
                     else:
-                        # On black bg: dark → black, light → color
                         r = int(r * brightness)
                         g = int(g * brightness)
                         b = int(b * brightness)
 
-                if self.invert:
+                if self.params['invert']:
                     r, g, b = 255 - r, 255 - g, 255 - b
 
                 painter.setPen(QtGui.QColor(r, g, b))
                 painter.drawText(
                     x * self.char_w,
-                    y * self.line_h + self.font_size,
+                    y * self.line_h + self.params['font_size'],
                     ch
                 )
 
@@ -225,13 +237,13 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         if self.ascii_symbols is None:
             return False
 
-        img_w = self.ascii_w * self.char_w
-        img_h = self.ascii_h * self.line_h
+        img_w = self.params['ascii_w'] * self.char_w
+        img_h = self.params['ascii_h'] * self.line_h
         qimg = QtGui.QImage(img_w, img_h, QtGui.QImage.Format_RGB888)
-        qimg.fill(QtCore.Qt.black if not self.invert else QtCore.Qt.white)
+        qimg.fill(QtCore.Qt.black if not self.params['invert'] else QtCore.Qt.white)
 
         painter = QtGui.QPainter(qimg)
-        font = QtGui.QFont("Courier New", self.font_size)
+        font = QtGui.QFont("Courier New", self.params['font_size'])
         painter.setFont(font)
         painter.setRenderHint(QtGui.QPainter.TextAntialiasing, False)
 
@@ -240,7 +252,7 @@ class ASCIICameraWidget(QtWidgets.QWidget):
             for x in range(W):
                 ch = self.ascii_symbols[y, x]
 
-                if self.use_color:
+                if self.params['use_color']:
                     color_arr = self.colors[y, x]
                 else:
                     val = int(self.gray[y, x])
@@ -248,10 +260,9 @@ class ASCIICameraWidget(QtWidgets.QWidget):
 
                 r, g, b = color_arr
 
-                # 🔹 Dot mode: same brightness modulation as in paintEvent
-                if self.char_set_name == "Dot":
+                if self.params['char_set_name'] == "Dot":
                     brightness = self.gray[y, x] / 255.0
-                    if self.invert:
+                    if self.params['invert']:
                         r = int(r * (1 - brightness) + 255 * brightness)
                         g = int(g * (1 - brightness) + 255 * brightness)
                         b = int(b * (1 - brightness) + 255 * brightness)
@@ -260,13 +271,13 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                         g = int(g * brightness)
                         b = int(b * brightness)
 
-                if self.invert:
+                if self.params['invert']:
                     r, g, b = 255 - r, 255 - g, 255 - b
 
                 painter.setPen(QtGui.QColor(r, g, b))
                 painter.drawText(
                     x * self.char_w,
-                    y * self.line_h + self.font_size,
+                    y * self.line_h + self.params['font_size'],
                     ch
                 )
         painter.end()
@@ -305,7 +316,10 @@ class ASCIICameraWidget(QtWidgets.QWidget):
 
 
 class ControlPanel(QtWidgets.QWidget):
-    params_changed = QtCore.Signal(dict)
+    params_changed = QtCore.Signal(
+        int, int, float, int, bool, bool, bool, str
+    )  # ascii_w, ascii_h, contrast, font_size, use_color, invert, auto_contrast, char_set_name
+
     save_png = QtCore.Signal()
     save_txt = QtCore.Signal()
     copy_text = QtCore.Signal()
@@ -320,22 +334,19 @@ class ControlPanel(QtWidgets.QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
 
-        # Sliders
         self.width_slider = self._make_slider("Width", 20, 120, DEFAULTS['width'], "chars")
         self.height_slider = self._make_slider("Height", 10, 70, DEFAULTS['height'], "chars")
         self.contrast_slider = self._make_slider("Contrast", 0.5, 3.0, DEFAULTS['contrast'], "", factor=100)
         self.font_slider = self._make_slider("Font size", 6, 20, DEFAULTS['font_size'], "pt")
 
-        # Char set combo — now with "Dot"
         char_layout = QtWidgets.QHBoxLayout()
         char_layout.addWidget(QtWidgets.QLabel("Char set:"))
         self.char_combo = QtWidgets.QComboBox()
-        self.char_combo.addItems(["Detailed", "Newspaper", "Block", "Dot"])  # ← added "Dot"
+        self.char_combo.addItems(["Detailed", "Newspaper", "Block", "Dot"])
         self.char_combo.setCurrentText(DEFAULTS['char_set'])
         char_layout.addWidget(self.char_combo)
         char_layout.addStretch()
 
-        # Toggles
         toggle_layout = QtWidgets.QHBoxLayout()
         self.color_cb = QtWidgets.QCheckBox("Color")
         self.color_cb.setChecked(DEFAULTS['use_color'])
@@ -349,7 +360,6 @@ class ControlPanel(QtWidgets.QWidget):
         toggle_layout.addWidget(self.auto_contrast_cb)
         toggle_layout.addStretch()
 
-        # Buttons
         btn_layout = QtWidgets.QHBoxLayout()
         self.save_png_btn = QtWidgets.QPushButton("💾 Save PNG")
         self.save_txt_btn = QtWidgets.QPushButton("📄 Save TXT")
@@ -360,7 +370,6 @@ class ControlPanel(QtWidgets.QWidget):
         btn_layout.addWidget(self.copy_btn)
         btn_layout.addWidget(self.fullscreen_btn)
 
-        # Assemble
         layout.addLayout(self.width_slider['layout'])
         layout.addLayout(self.height_slider['layout'])
         layout.addLayout(self.contrast_slider['layout'])
@@ -371,15 +380,15 @@ class ControlPanel(QtWidgets.QWidget):
 
         self.setLayout(layout)
 
-        # Signals
-        self.width_slider['slider'].valueChanged.connect(self._on_change)
-        self.height_slider['slider'].valueChanged.connect(self._on_change)
-        self.contrast_slider['slider'].valueChanged.connect(self._on_change)
-        self.font_slider['slider'].valueChanged.connect(self._on_change)
-        self.char_combo.currentTextChanged.connect(self._on_change)
-        self.color_cb.stateChanged.connect(self._on_change)
-        self.invert_cb.stateChanged.connect(self._on_change)
-        self.auto_contrast_cb.stateChanged.connect(self._on_change)
+        # 🔥 КРИТИЧЕСКИ ВАЖНО: подключаем КАЖДОЕ изменение ОТДЕЛЬНО
+        self.width_slider['slider'].valueChanged.connect(self._emit_params)
+        self.height_slider['slider'].valueChanged.connect(self._emit_params)
+        self.contrast_slider['slider'].valueChanged.connect(self._emit_params)
+        self.font_slider['slider'].valueChanged.connect(self._emit_params)
+        self.char_combo.currentTextChanged.connect(self._emit_params)
+        self.color_cb.stateChanged.connect(self._emit_params)
+        self.invert_cb.stateChanged.connect(self._emit_params)
+        self.auto_contrast_cb.stateChanged.connect(self._emit_params)
 
         self.save_png_btn.clicked.connect(self.save_png)
         self.save_txt_btn.clicked.connect(self.save_txt)
@@ -392,7 +401,6 @@ class ControlPanel(QtWidgets.QWidget):
         slider.setMaximum(int(max_v * factor))
         slider.setValue(int(default * factor))
         slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
-        slider.setTickInterval(int((max_v - min_v) * factor / 5))
 
         label = QtWidgets.QLabel(f"{default}{suffix}")
         slider.valueChanged.connect(lambda v: label.setText(f"{v/factor:.1f}{suffix}"))
@@ -404,28 +412,18 @@ class ControlPanel(QtWidgets.QWidget):
 
         return {'slider': slider, 'label': label, 'layout': layout, 'factor': factor}
 
-    def _on_change(self):
-        data = {
-            'ascii_w': self.width_slider['slider'].value(),
-            'ascii_h': self.height_slider['slider'].value(),
-            'contrast': self.contrast_slider['slider'].value() / self.contrast_slider['factor'],
-            'font_size': self.font_slider['slider'].value(),
-            'use_color': self.color_cb.isChecked(),
-            'invert': self.invert_cb.isChecked(),
-            'auto_contrast': self.auto_contrast_cb.isChecked(),
-            'char_set_name': self.char_combo.currentText(),
-        }
-        self.params_changed.emit(data)
+    def _emit_params(self):
+        """Emit all current values as separate args (robust for Android)"""
+        w = self.width_slider['slider'].value()
+        h = self.height_slider['slider'].value()
+        contrast = self.contrast_slider['slider'].value() / 100.0
+        font = self.font_slider['slider'].value()
+        use_color = self.color_cb.isChecked()
+        invert = self.invert_cb.isChecked()
+        auto_contrast = self.auto_contrast_cb.isChecked()
+        char_set = self.char_combo.currentText()
 
-    def update_from_defaults(self):
-        self.width_slider['slider'].setValue(DEFAULTS['width'])
-        self.height_slider['slider'].setValue(DEFAULTS['height'])
-        self.contrast_slider['slider'].setValue(int(DEFAULTS['contrast'] * 100))
-        self.font_slider['slider'].setValue(DEFAULTS['font_size'])
-        self.char_combo.setCurrentText(DEFAULTS['char_set'])
-        self.color_cb.setChecked(DEFAULTS['use_color'])
-        self.invert_cb.setChecked(DEFAULTS['invert'])
-        self.auto_contrast_cb.setChecked(DEFAULTS['auto_contrast'])
+        self.params_changed.emit(w, h, contrast, font, use_color, invert, auto_contrast, char_set)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -437,7 +435,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.camera_widget = ASCIICameraWidget()
         self.control_panel = ControlPanel()
 
-        self.status_label = QtWidgets.QLabel("FPS: 0.0 | Camera: ?×? | Orientation: —")
+        self.status_label = QtWidgets.QLabel("FPS: 0.0 | Camera: ?×? | Mode: —")
         self.statusBar().addWidget(self.status_label)
 
         central = QtWidgets.QWidget()
@@ -453,23 +451,25 @@ class MainWindow(QtWidgets.QMainWindow):
         central.setLayout(layout)
         self.setCentralWidget(central)
 
-        # Connections
-        self.control_panel.params_changed.connect(self.camera_widget.update_params)
+        # 🔥 ПРАВИЛЬНОЕ ПОДКЛЮЧЕНИЕ СЛОТА:
+        self.control_panel.params_changed.connect(
+            self.on_params_changed,
+            type=QtCore.Qt.DirectConnection  # ← гарантирует мгновенное выполнение на Android
+        )
+
         self.control_panel.save_png.connect(self.save_png)
         self.control_panel.save_txt.connect(self.save_txt)
         self.control_panel.copy_text.connect(self.copy_text)
         self.control_panel.fullscreen_requested.connect(self.toggle_fullscreen)
 
-        # Status & auto-orientation
         self.status_timer = QtCore.QTimer()
         self.status_timer.timeout.connect(self.update_status)
         self.status_timer.start(500)
 
         self.orientation_timer = QtCore.QTimer()
         self.orientation_timer.timeout.connect(self.check_orientation)
-        self.orientation_timer.start(1000)
+        self.orientation_timer.start(2000)
 
-        # Shortcuts
         self.shortcut_fullscreen = QtGui.QShortcut(QtGui.QKeySequence("F11"), self)
         self.shortcut_fullscreen.activated.connect(self.toggle_fullscreen)
         self.shortcut_save_png = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+P"), self)
@@ -477,38 +477,44 @@ class MainWindow(QtWidgets.QMainWindow):
         self.shortcut_save_txt = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+T"), self)
         self.shortcut_save_txt.activated.connect(self.save_txt)
 
+    def on_params_changed(self, w, h, contrast, font_size, use_color, invert, auto_contrast, char_set_name):
+        """Direct slot — no dict unpacking issues"""
+        self.camera_widget.update_params(
+            ascii_w=w,
+            ascii_h=h,
+            contrast=contrast,
+            font_size=font_size,
+            use_color=use_color,
+            invert=invert,
+            auto_contrast=auto_contrast,
+            char_set_name=char_set_name
+        )
+
     def check_orientation(self):
         screen = self.screen()
         geo = screen.geometry()
         w, h = geo.width(), geo.height()
         is_landscape = w > h
 
-        if is_landscape:
-            target_ratio = 2.0
-        else:
-            target_ratio = 1.4
-
-        new_h = min(40, max(20, self.camera_widget.ascii_h))
+        target_ratio = 2.0 if is_landscape else 1.4
+        new_h = min(45, max(20, self.camera_widget.params['ascii_h']))
         new_w = int(new_h * target_ratio)
         new_w = max(20, min(120, new_w))
 
-        if abs(new_w - self.camera_widget.ascii_w) > 5 or abs(new_h - self.camera_widget.ascii_h) > 3:
+        if abs(new_w - self.camera_widget.params['ascii_w']) > 5 or abs(new_h - self.camera_widget.params['ascii_h']) > 3:
             self.camera_widget.update_params(ascii_w=new_w, ascii_h=new_h)
             self.control_panel.width_slider['slider'].setValue(new_w)
             self.control_panel.height_slider['slider'].setValue(new_h)
 
     def update_status(self):
         w, h = -1, -1
-        orient = "Landscape" if self.width() > self.height() else "Portrait"
         if self.camera_widget.cap.isOpened():
             w = int(self.camera_widget.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(self.camera_widget.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        mode = self.camera_widget.params['char_set_name']
         self.status_label.setText(
-            f"FPS: {self.camera_widget.fps:.1f} | "
-            f"ASCII: {self.camera_widget.ascii_w}×{self.camera_widget.ascii_h} | "
-            f"Camera: {w}×{h} | "
-            f"Orientation: {orient} | "
-            f"Mode: {self.camera_widget.char_set_name}"
+            f"FPS: {self.camera_widget.fps:.1f} | ASCII: {self.camera_widget.params['ascii_w']}×{self.camera_widget.params['ascii_h']} | "
+            f"Camera: {w}×{h} | Mode: {mode}"
         )
 
     def save_png(self):
@@ -526,17 +532,13 @@ class MainWindow(QtWidgets.QMainWindow):
             cb.setText(text)
             QtWidgets.QMessageBox.information(self, "📋 Copied", "ASCII text copied to clipboard!")
         else:
-            QtWidgets.QMessageBox.warning(self, "⚠️ Empty", "No frame available to copy.")
+            QtWidgets.QMessageBox.warning(self, "⚠️ Empty", "No frame available.")
 
     def _show_save_result(self, success, fmt, path):
         if success:
-            QtWidgets.QMessageBox.information(
-                self, f"✅ {fmt} Saved", f"Saved to:\n{path}"
-            )
+            QtWidgets.QMessageBox.information(self, f"✅ {fmt} Saved", f"Saved to:\n{path}")
         else:
-            QtWidgets.QMessageBox.critical(
-                self, f"❌ {fmt} Error", f"Failed to save {fmt} file!"
-            )
+            QtWidgets.QMessageBox.critical(self, f"❌ {fmt} Error", f"Failed to save {fmt} file!")
 
     def toggle_fullscreen(self):
         if self.isFullScreen():
@@ -557,16 +559,20 @@ if __name__ == "__main__":
     app.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)
     app.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps)
 
-    # Dark theme
     app.setStyle("Fusion")
     palette = app.palette()
-    palette.setColor(QtGui.QPalette.Window, QtGui.QColor(30, 30, 30))
+    palette.setColor(QtGui.QPalette.Window, QtGui.QColor(25, 25, 25))
     palette.setColor(QtGui.QPalette.WindowText, QtCore.Qt.white)
     palette.setColor(QtGui.QPalette.Button, QtGui.QColor(50, 50, 50))
     palette.setColor(QtGui.QPalette.ButtonText, QtCore.Qt.white)
     palette.setColor(QtGui.QPalette.Base, QtGui.QColor(20, 20, 20))
-    palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(40, 40, 40))
+    palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(35, 35, 35))
     app.setPalette(palette)
+
+    # Force high-DPI font smoothing (helps on Android)
+    font = app.font()
+    font.setPointSize(9)
+    app.setFont(font)
 
     window = MainWindow()
     window.show()
