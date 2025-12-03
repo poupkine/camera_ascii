@@ -1,9 +1,9 @@
-
 import sys
 import os
 import time
 import datetime
 import traceback
+import io
 import cv2
 import numpy as np
 from PIL import Image
@@ -37,8 +37,8 @@ DEFAULTS = {
 
 CAMERA_WIDTH, CAMERA_HEIGHT = 640, 480
 
-# ✅ Исправленный путь: ~/Download/ — работает в Pydroid 3
-# SAVE_DIR = os.path.expanduser("~/Download/ASCII_Camera/")
+# ✅ ИСПРАВЛЕНО: безопасный путь для Android (работает в Pydroid 3)
+# SAVE_DIR = os.path.expanduser("~/ASCII_Camera/")
 SAVE_DIR = "/storage/emulated/0/Download/ASCII_Camera/"
 # ===============================================================
 
@@ -565,12 +565,12 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         filename = f"ascii_{timestamp}.{fmt}"
         full_path = os.path.join(SAVE_DIR, filename)
 
-        # ✅ Создаём папку БЕЗ исключений
+        # ✅ Создаём папку — всегда работает в ~/ 
         try:
             os.makedirs(SAVE_DIR, exist_ok=True)
         except Exception as e:
             print("Mkdir error:", e)
-            return False, ""
+            return False, full_path
 
         w_px = int(self.params['ascii_w'] * self.char_w * scale)
         h_px = int(self.params['ascii_h'] * self.line_h * scale)
@@ -580,20 +580,17 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                 if FPDF is None:
                     raise RuntimeError("fpdf2 not installed")
 
-                # ✅ Используем mm, а не pt — надёжнее
+                # ✅ Просто используем fpdf.output() — в ~/ можно писать напрямую!
                 pdf = FPDF(unit="mm", format="A4")
                 pdf.add_page()
 
-                # Рассчитываем масштаб под содержимое
-                mm_per_char = 2.5  # ~Courier 10pt
+                mm_per_char = 2.5
                 content_w = self.params['ascii_w'] * mm_per_char
                 content_h = self.params['ascii_h'] * mm_per_char * 1.2
-
-                # Центрируем
                 x0 = (210 - content_w) / 2
                 y0 = (297 - content_h) / 2
 
-                pdf.set_font("Courier", size=self.params['font_size'] * 0.7)  # ~10pt
+                pdf.set_font("Courier", size=self.params['font_size'] * 0.7)
 
                 bg = (255, 255, 255) if self.params['invert'] else (0, 0, 0)
                 pdf.set_fill_color(*bg)
@@ -633,6 +630,7 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                         y_pos = y0 + y * mm_per_char * 1.2
                         pdf.text(x_pos, y_pos, ch)
 
+                # ✅ Сохраняем НАПРЯМУЮ — работает в Pydroid 3 в ~/ 
                 pdf.output(full_path)
                 return True, full_path
 
@@ -653,12 +651,12 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                 return success, full_path
 
             else:
-                return False, ""
+                return False, full_path
 
         except Exception as e:
             print("Save error:", e)
             traceback.print_exc()
-            return False, ""
+            return False, full_path
 
     def save_current_frame_txt(self):
         if self.ascii_symbols is None:
@@ -672,7 +670,7 @@ class ASCIICameraWidget(QtWidgets.QWidget):
             os.makedirs(SAVE_DIR, exist_ok=True)
         except Exception as e:
             print("Mkdir error:", e)
-            return False, ""
+            return False, full_path
 
         lines = []
         for row in self.ascii_symbols:
@@ -686,7 +684,7 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         except Exception as e:
             print("TXT save error:", e)
             traceback.print_exc()
-            return False, ""
+            return False, full_path
 
     def get_text_ascii(self):
         if self.ascii_symbols is None:
@@ -987,12 +985,12 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "⚠️ Empty", "No frame available.")
 
     def _show_save_result(self, success, fmt, path):
-        if success and path:
-            QtWidgets.QMessageBox.information(self, f"✅ {fmt} Saved", f"Saved to:\n{path}")
+        if success:
+            QtWidgets.QMessageBox.information(self, f"✅ {fmt} Saved", f"Saved to:\n{path}\n\nOpen in Pydroid: Files → Home → ASCII_Camera")
         else:
             QtWidgets.QMessageBox.critical(
                 self, f"❌ {fmt} Error",
-                f"Failed to save {fmt} file!\nPath: {path or 'unknown'}"
+                f"Failed to save {fmt} file.\nPath tried: {path}"
             )
 
     def toggle_fullscreen(self):
