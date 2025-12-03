@@ -54,7 +54,19 @@ pip install -r requirements.txt
 python ascii_camera.py
 ```
 
-MIT License
+
+## 🌟 Inspired by
+jpventer/ascii-webcam
+ThePracticalDev/ASCII-Camera
+
+## ✨ Contribution welcome! Open an issue or PR for:
+
+New char sets (Braille, emoji?)
+Video recording
+QR-code overlay
+SSH terminal mode
+
+## MIT License
 
 Copyright (c) 2025 Vasily Popkine
 
