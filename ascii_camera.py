@@ -16,7 +16,8 @@ from PySide6 import QtCore, QtWidgets, QtGui
 CHAR_SETS = {
     "Detailed": " .'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$",
     "Newspaper": "@#%+=-:. ",
-    "Block": "█▒░ ",  # Unicode block elements (may render as squares on some devices)
+    "Block": "█▒░ ",  # Unicode block elements
+    "Dot": ".",        # ← NEW: ONLY DOT MODE
 }
 
 DEFAULTS = {
@@ -27,7 +28,7 @@ DEFAULTS = {
     'use_color': True,
     'invert': False,
     'auto_contrast': False,
-    'char_set': "Detailed",  # "Detailed", "Newspaper", "Block"
+    'char_set': "Detailed",
 }
 
 CAMERA_WIDTH, CAMERA_HEIGHT = 640, 480
@@ -40,15 +41,19 @@ class ASCIIRenderer:
     def __init__(self):
         self.chars = None
         self.n = 0
+        self.mode = "normal"  # "normal" or "dot"
 
     def set_chars(self, char_string):
-        self.chars = np.array(list(char_string))
-        self.n = len(self.chars)
+        if char_string == ".":
+            self.mode = "dot"
+            self.chars = np.array(['.'])
+            self.n = 1
+        else:
+            self.mode = "normal"
+            self.chars = np.array(list(char_string))
+            self.n = len(self.chars)
 
     def render(self, frame_rgb, out_w, out_h, contrast=1.0, auto_contrast=False):
-        if self.chars is None:
-            raise ValueError("Char set not initialized")
-
         pil_img = Image.fromarray(frame_rgb)
         resized = pil_img.resize((out_w, out_h), Image.Resampling.LANCZOS)
         img = np.array(resized)
@@ -62,10 +67,16 @@ class ASCIIRenderer:
         else:
             gray = np.clip(128 + (gray - 128) * contrast, 0, 255)
 
-        indices = np.clip((gray / 255.0) * (self.n - 1), 0, self.n - 1).astype(int)
-        symbols = self.chars[indices]
-
-        return symbols, img.astype(np.uint8), gray.astype(np.uint8)
+        if self.mode == "dot":
+            # Dot mode: always '.', but brightness = gray
+            symbols = np.full(gray.shape, '.', dtype='<U1')
+            # Colors: use original color (if color mode) OR grayscale (val, val, val)
+            # Gray is used for alpha/intensity simulation (via brightness)
+            return symbols, img.astype(np.uint8), gray.astype(np.uint8)
+        else:
+            indices = np.clip((gray / 255.0) * (self.n - 1), 0, self.n - 1).astype(int)
+            symbols = self.chars[indices]
+            return symbols, img.astype(np.uint8), gray.astype(np.uint8)
 
 
 class ASCIICameraWidget(QtWidgets.QWidget):
@@ -173,17 +184,37 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         for y in range(H):
             for x in range(W):
                 ch = self.ascii_symbols[y, x]
+
+                # Color logic
                 if self.use_color:
-                    color_arr = self.colors[y, x]
+                    color_arr = self.colors[y, x]  # (R, G, B)
                 else:
                     val = int(self.gray[y, x])
                     color_arr = (val, val, val)
 
                 r, g, b = color_arr
+
+                # 🔹 Dot mode: modulate brightness by gray value
+                if self.char_set_name == "Dot":
+                    # Simulate "transparency" via brightness:
+                    # — dark gray → dark dot
+                    # — light gray → light dot (almost invisible on black bg)
+                    brightness = self.gray[y, x] / 255.0
+                    if self.invert:
+                        # On white bg: dark dots should be dark, light → gray
+                        r = int(r * (1 - brightness) + 255 * brightness)
+                        g = int(g * (1 - brightness) + 255 * brightness)
+                        b = int(b * (1 - brightness) + 255 * brightness)
+                    else:
+                        # On black bg: dark → black, light → color
+                        r = int(r * brightness)
+                        g = int(g * brightness)
+                        b = int(b * brightness)
+
                 if self.invert:
                     r, g, b = 255 - r, 255 - g, 255 - b
-                painter.setPen(QtGui.QColor(r, g, b))
 
+                painter.setPen(QtGui.QColor(r, g, b))
                 painter.drawText(
                     x * self.char_w,
                     y * self.line_h + self.font_size,
@@ -208,6 +239,7 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         for y in range(H):
             for x in range(W):
                 ch = self.ascii_symbols[y, x]
+
                 if self.use_color:
                     color_arr = self.colors[y, x]
                 else:
@@ -215,10 +247,23 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                     color_arr = (val, val, val)
 
                 r, g, b = color_arr
+
+                # 🔹 Dot mode: same brightness modulation as in paintEvent
+                if self.char_set_name == "Dot":
+                    brightness = self.gray[y, x] / 255.0
+                    if self.invert:
+                        r = int(r * (1 - brightness) + 255 * brightness)
+                        g = int(g * (1 - brightness) + 255 * brightness)
+                        b = int(b * (1 - brightness) + 255 * brightness)
+                    else:
+                        r = int(r * brightness)
+                        g = int(g * brightness)
+                        b = int(b * brightness)
+
                 if self.invert:
                     r, g, b = 255 - r, 255 - g, 255 - b
-                painter.setPen(QtGui.QColor(r, g, b))
 
+                painter.setPen(QtGui.QColor(r, g, b))
                 painter.drawText(
                     x * self.char_w,
                     y * self.line_h + self.font_size,
@@ -248,7 +293,6 @@ class ASCIICameraWidget(QtWidgets.QWidget):
             return False
 
     def get_text_ascii(self):
-        """Returns current frame as pure ASCII text (for copy/export)"""
         if self.ascii_symbols is None:
             return ""
         return "\n".join("".join(row) for row in self.ascii_symbols)
@@ -282,11 +326,11 @@ class ControlPanel(QtWidgets.QWidget):
         self.contrast_slider = self._make_slider("Contrast", 0.5, 3.0, DEFAULTS['contrast'], "", factor=100)
         self.font_slider = self._make_slider("Font size", 6, 20, DEFAULTS['font_size'], "pt")
 
-        # Char set combo
+        # Char set combo — now with "Dot"
         char_layout = QtWidgets.QHBoxLayout()
         char_layout.addWidget(QtWidgets.QLabel("Char set:"))
         self.char_combo = QtWidgets.QComboBox()
-        self.char_combo.addItems(["Detailed", "Newspaper", "Block"])
+        self.char_combo.addItems(["Detailed", "Newspaper", "Block", "Dot"])  # ← added "Dot"
         self.char_combo.setCurrentText(DEFAULTS['char_set'])
         char_layout.addWidget(self.char_combo)
         char_layout.addStretch()
@@ -423,7 +467,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.orientation_timer = QtCore.QTimer()
         self.orientation_timer.timeout.connect(self.check_orientation)
-        self.orientation_timer.start(1000)  # check every second
+        self.orientation_timer.start(1000)
 
         # Shortcuts
         self.shortcut_fullscreen = QtGui.QShortcut(QtGui.QKeySequence("F11"), self)
@@ -434,24 +478,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.shortcut_save_txt.activated.connect(self.save_txt)
 
     def check_orientation(self):
-        """Auto-adjust ASCII size based on screen orientation (rough estimation)"""
         screen = self.screen()
         geo = screen.geometry()
         w, h = geo.width(), geo.height()
         is_landscape = w > h
 
-        # Heuristic: adjust default ratio
         if is_landscape:
-            target_ratio = 2.0  # e.g. 80x40
+            target_ratio = 2.0
         else:
-            target_ratio = 1.4  # e.g. 50x36
+            target_ratio = 1.4
 
-        # Keep height ~30-40, adjust width
         new_h = min(40, max(20, self.camera_widget.ascii_h))
         new_w = int(new_h * target_ratio)
         new_w = max(20, min(120, new_w))
 
-        # Apply only if significantly different
         if abs(new_w - self.camera_widget.ascii_w) > 5 or abs(new_h - self.camera_widget.ascii_h) > 3:
             self.camera_widget.update_params(ascii_w=new_w, ascii_h=new_h)
             self.control_panel.width_slider['slider'].setValue(new_w)
@@ -467,18 +507,17 @@ class MainWindow(QtWidgets.QMainWindow):
             f"FPS: {self.camera_widget.fps:.1f} | "
             f"ASCII: {self.camera_widget.ascii_w}×{self.camera_widget.ascii_h} | "
             f"Camera: {w}×{h} | "
-            f"Orientation: {orient}"
+            f"Orientation: {orient} | "
+            f"Mode: {self.camera_widget.char_set_name}"
         )
 
     def save_png(self):
         success = self.camera_widget.save_current_frame_png()
-        path = SAVE_PATH_PNG
-        self._show_save_result(success, "PNG", path)
+        self._show_save_result(success, "PNG", SAVE_PATH_PNG)
 
     def save_txt(self):
         success = self.camera_widget.save_current_frame_txt()
-        path = SAVE_PATH_TXT
-        self._show_save_result(success, "TXT", path)
+        self._show_save_result(success, "TXT", SAVE_PATH_TXT)
 
     def copy_text(self):
         text = self.camera_widget.get_text_ascii()
