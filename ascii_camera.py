@@ -1,18 +1,18 @@
+
 import sys
 import os
 import time
 import datetime
+import traceback
 import cv2
 import numpy as np
 from PIL import Image
 
 from PySide6 import QtCore, QtWidgets, QtGui
 
-# Для PDF — чисто Python, работает на Android
 try:
-    from fpdf import FPDF, FontFace
+    from fpdf import FPDF
 except ImportError:
-    # Если не установлен — покажем ошибку при попытке сохранить PDF
     FPDF = None
 
 
@@ -36,8 +36,286 @@ DEFAULTS = {
 }
 
 CAMERA_WIDTH, CAMERA_HEIGHT = 640, 480
+
+# ✅ Исправленный путь: ~/Download/ — работает в Pydroid 3
+# SAVE_DIR = os.path.expanduser("~/Download/ASCII_Camera/")
 SAVE_DIR = "/storage/emulated/0/Download/ASCII_Camera/"
 # ===============================================================
+
+
+class ThemeManager(QtCore.QObject):
+    theme_changed = QtCore.Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.settings = QtCore.QSettings("ASCII_Camera", "Pro")
+        self._current_mode = self.settings.value("theme_mode", "auto")
+        self._applied_theme = "light"
+
+    def detect_system_theme(self):
+        app_name = QtWidgets.QApplication.applicationDisplayName()
+        if "dark" in app_name.lower() or "black" in app_name.lower():
+            return "dark"
+        try:
+            palette = QtWidgets.QApplication.palette()
+            window_color = palette.color(QtGui.QPalette.Window)
+            brightness = (0.299 * window_color.red() +
+                          0.587 * window_color.green() +
+                          0.114 * window_color.blue())
+            return "dark" if brightness < 128 else "light"
+        except:
+            return "light"
+
+    def get_effective_theme(self):
+        if self._current_mode == "auto":
+            return self.detect_system_theme()
+        return self._current_mode
+
+    def get_palette_and_stylesheet(self, theme_name):
+        if theme_name == "dark":
+            return self._create_dark_palette(), self._dark_stylesheet()
+        else:
+            return self._create_light_palette(), self._light_stylesheet()
+
+    def _create_light_palette(self):
+        p = QtGui.QPalette()
+        p.setColor(QtGui.QPalette.Window, QtGui.QColor(240, 240, 240))
+        p.setColor(QtGui.QPalette.WindowText, QtCore.Qt.black)
+        p.setColor(QtGui.QPalette.Base, QtCore.Qt.white)
+        p.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(245, 245, 245))
+        p.setColor(QtGui.QPalette.ToolTipBase, QtCore.Qt.black)
+        p.setColor(QtGui.QPalette.ToolTipText, QtCore.Qt.black)
+        p.setColor(QtGui.QPalette.Text, QtCore.Qt.black)
+        p.setColor(QtGui.QPalette.Button, QtGui.QColor(230, 230, 230))
+        p.setColor(QtGui.QPalette.ButtonText, QtCore.Qt.black)
+        p.setColor(QtGui.QPalette.BrightText, QtCore.Qt.red)
+        p.setColor(QtGui.QPalette.Link, QtGui.QColor(0, 100, 200))
+        p.setColor(QtGui.QPalette.Highlight, QtGui.QColor(0, 120, 215))
+        p.setColor(QtGui.QPalette.HighlightedText, QtCore.Qt.white)
+        p.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.Text, QtCore.Qt.gray)
+        p.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.ButtonText, QtCore.Qt.gray)
+        return p
+
+    def _create_dark_palette(self):
+        p = QtGui.QPalette()
+        p.setColor(QtGui.QPalette.Window, QtGui.QColor(25, 25, 25))
+        p.setColor(QtGui.QPalette.WindowText, QtCore.Qt.white)
+        p.setColor(QtGui.QPalette.Base, QtGui.QColor(35, 35, 35))
+        p.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(53, 53, 53))
+        p.setColor(QtGui.QPalette.ToolTipBase, QtCore.Qt.white)
+        p.setColor(QtGui.QPalette.ToolTipText, QtCore.Qt.white)
+        p.setColor(QtGui.QPalette.Text, QtCore.Qt.white)
+        p.setColor(QtGui.QPalette.Button, QtGui.QColor(53, 53, 53))
+        p.setColor(QtGui.QPalette.ButtonText, QtCore.Qt.white)
+        p.setColor(QtGui.QPalette.BrightText, QtCore.Qt.red)
+        p.setColor(QtGui.QPalette.Link, QtGui.QColor(42, 130, 218))
+        p.setColor(QtGui.QPalette.Highlight, QtGui.QColor(42, 130, 218))
+        p.setColor(QtGui.QPalette.HighlightedText, QtCore.Qt.black)
+        p.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.Text, QtCore.Qt.darkGray)
+        p.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.ButtonText, QtCore.Qt.darkGray)
+        return p
+
+    def _light_stylesheet(self):
+        return """
+            QLabel, QComboBox, QCheckBox, QRadioButton {
+                color: black;
+                font-size: 10pt;
+            }
+            QSlider::groove:horizontal {
+                border: 1px solid #999;
+                background: #ddd;
+                height: 6px;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #0078D7;
+                border: 1px solid #555;
+                width: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }
+            QCheckBox::indicator, QRadioButton::indicator {
+                width: 16px;
+                height: 16px;
+            }
+            QCheckBox::indicator:unchecked,
+            QRadioButton::indicator:unchecked {
+                border: 2px solid #888;
+                background: white;
+            }
+            QCheckBox::indicator:checked {
+                image: url(none);
+                background: white;
+                border: 2px solid #0078D7;
+            }
+            QCheckBox::indicator:checked::after {
+                content: "";
+                position: absolute;
+                top: 2px;
+                left: 5px;
+                width: 4px;
+                height: 8px;
+                border: solid black;
+                border-width: 0 2px 2px 0;
+                transform: rotate(45deg);
+            }
+            QRadioButton::indicator:checked {
+                image: url(none);
+                background: white;
+                border: 2px solid #0078D7;
+            }
+            QRadioButton::indicator:checked::after {
+                content: "";
+                position: absolute;
+                top: 4px;
+                left: 4px;
+                width: 8px;
+                height: 8px;
+                background: #0078D7;
+                border-radius: 4px;
+            }
+            QPushButton {
+                background-color: #e0e0e0;
+                color: black;
+                border: 1px solid #aaa;
+                padding: 4px;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #d0d0d0;
+            }
+            QComboBox {
+                color: black;
+                background: white;
+                selection-background-color: #0078D7;
+                selection-color: white;
+            }
+            QToolTip {
+                color: black;
+                background-color: #ffffc0;
+                border: 1px solid black;
+            }
+            QStatusBar QLabel {
+                color: black;
+                font-weight: bold;
+            }
+        """
+
+    def _dark_stylesheet(self):
+        return """
+            QLabel, QComboBox, QCheckBox, QRadioButton {
+                color: white;
+                font-size: 10pt;
+            }
+            QSlider::groove:horizontal {
+                border: 1px solid #555;
+                background: #333;
+                height: 6px;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #4CAF50;
+                border: 1px solid #444;
+                width: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }
+            QCheckBox::indicator, QRadioButton::indicator {
+                width: 16px;
+                height: 16px;
+            }
+            QCheckBox::indicator:unchecked,
+            QRadioButton::indicator:unchecked {
+                border: 2px solid #aaa;
+                background: #222;
+            }
+            QCheckBox::indicator:checked {
+                image: url(none);
+                background: #222;
+                border: 2px solid #4CAF50;
+            }
+            QCheckBox::indicator:checked::after {
+                content: "";
+                position: absolute;
+                top: 2px;
+                left: 5px;
+                width: 4px;
+                height: 8px;
+                border: solid white;
+                border-width: 0 2px 2px 0;
+                transform: rotate(45deg);
+            }
+            QRadioButton::indicator:checked {
+                image: url(none);
+                background: #222;
+                border: 2px solid #4CAF50;
+            }
+            QRadioButton::indicator:checked::after {
+                content: "";
+                position: absolute;
+                top: 4px;
+                left: 4px;
+                width: 8px;
+                height: 8px;
+                background: #4CAF50;
+                border-radius: 4px;
+            }
+            QPushButton {
+                background-color: #444;
+                color: white;
+                border: 1px solid #666;
+                padding: 4px;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #555;
+            }
+            QComboBox {
+                color: white;
+                background: #333;
+                selection-background-color: #4CAF50;
+                selection-color: black;
+            }
+            QToolTip {
+                color: white;
+                background-color: #2a82da;
+                border: 1px solid white;
+            }
+            QStatusBar QLabel {
+                color: white;
+                font-weight: bold;
+            }
+        """
+
+    def set_theme_mode(self, mode):
+        if mode not in ("auto", "dark", "light"):
+            return
+        self._current_mode = mode
+        self.settings.setValue("theme_mode", mode)
+        self.apply_current_theme()
+        self.theme_changed.emit(mode)
+
+    def apply_current_theme(self):
+        app = QtWidgets.QApplication.instance()
+        theme_name = self.get_effective_theme()
+        palette, stylesheet = self.get_palette_and_stylesheet(theme_name)
+        app.setStyle("Fusion")
+        app.setPalette(palette)
+        app.setStyleSheet(stylesheet)
+        self._applied_theme = theme_name
+
+    def get_icon_for_mode(self, mode):
+        if mode == "auto":
+            return "🌓"
+        elif mode == "dark":
+            return "🌑"
+        else:
+            return "🌞"
+
+    def cycle_mode(self):
+        order = ["auto", "dark", "light"]
+        idx = order.index(self._current_mode)
+        self.set_theme_mode(order[(idx + 1) % len(order)])
 
 
 class ASCIIRenderer:
@@ -286,7 +564,13 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         timestamp = datetime.datetime.now().strftime("%d%m%Y_%H%M%S")
         filename = f"ascii_{timestamp}.{fmt}"
         full_path = os.path.join(SAVE_DIR, filename)
-        os.makedirs(SAVE_DIR, exist_ok=True)
+
+        # ✅ Создаём папку БЕЗ исключений
+        try:
+            os.makedirs(SAVE_DIR, exist_ok=True)
+        except Exception as e:
+            print("Mkdir error:", e)
+            return False, ""
 
         w_px = int(self.params['ascii_w'] * self.char_w * scale)
         h_px = int(self.params['ascii_h'] * self.line_h * scale)
@@ -294,30 +578,32 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         try:
             if fmt == "pdf":
                 if FPDF is None:
-                    raise RuntimeError("fpdf2 is not installed. Run: pip install fpdf2")
+                    raise RuntimeError("fpdf2 not installed")
 
-                # ✅ Новый PDF через fpdf2
-                pdf = FPDF(unit="pt", format=(w_px, h_px))
+                # ✅ Используем mm, а не pt — надёжнее
+                pdf = FPDF(unit="mm", format="A4")
                 pdf.add_page()
-                pdf.set_auto_page_break(False)
 
-                # Courier — моноширинный, встроен в fpdf2
-                pdf.set_font("Courier", size=self.params['font_size'] * scale)
+                # Рассчитываем масштаб под содержимое
+                mm_per_char = 2.5  # ~Courier 10pt
+                content_w = self.params['ascii_w'] * mm_per_char
+                content_h = self.params['ascii_h'] * mm_per_char * 1.2
 
-                H, W = self.ascii_symbols.shape
-                char_w_pt = self.char_w * scale
-                line_h_pt = self.line_h * scale
-                font_size_pt = self.params['font_size'] * scale
+                # Центрируем
+                x0 = (210 - content_w) / 2
+                y0 = (297 - content_h) / 2
 
-                # Белый/чёрный фон
+                pdf.set_font("Courier", size=self.params['font_size'] * 0.7)  # ~10pt
+
                 bg = (255, 255, 255) if self.params['invert'] else (0, 0, 0)
                 pdf.set_fill_color(*bg)
-                pdf.rect(0, 0, w_px, h_px, "F")
+                pdf.rect(0, 0, 210, 297, "F")
 
+                H, W = self.ascii_symbols.shape
                 for y in range(H):
                     for x in range(W):
                         ch = self.ascii_symbols[y, x]
-                        if ch == "":  # защита
+                        if ch == "":
                             continue
 
                         if self.params['use_color']:
@@ -343,9 +629,8 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                             r, g, b = 255 - r, 255 - g, 255 - b
 
                         pdf.set_text_color(r, g, b)
-                        # Позиция: x, y — в pt
-                        x_pos = x * char_w_pt
-                        y_pos = y * line_h_pt + font_size_pt * 0.8  # подбор базовой линии
+                        x_pos = x0 + x * mm_per_char
+                        y_pos = y0 + y * mm_per_char * 1.2
                         pdf.text(x_pos, y_pos, ch)
 
                 pdf.output(full_path)
@@ -371,7 +656,8 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                 return False, ""
 
         except Exception as e:
-            print(f"Save error ({fmt}):", e)
+            print("Save error:", e)
+            traceback.print_exc()
             return False, ""
 
     def save_current_frame_txt(self):
@@ -382,18 +668,24 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         filename = f"ascii_{timestamp}.txt"
         full_path = os.path.join(SAVE_DIR, filename)
 
+        try:
+            os.makedirs(SAVE_DIR, exist_ok=True)
+        except Exception as e:
+            print("Mkdir error:", e)
+            return False, ""
+
         lines = []
         for row in self.ascii_symbols:
             lines.append("".join(row))
         text = "\n".join(lines)
 
-        os.makedirs(SAVE_DIR, exist_ok=True)
         try:
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(text)
             return True, full_path
         except Exception as e:
             print("TXT save error:", e)
+            traceback.print_exc()
             return False, ""
 
     def get_text_ascii(self):
@@ -467,6 +759,7 @@ class ControlPanel(QtWidgets.QWidget):
     save_txt = QtCore.Signal()
     copy_text = QtCore.Signal()
     fullscreen_requested = QtCore.Signal()
+    theme_requested = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -483,7 +776,8 @@ class ControlPanel(QtWidgets.QWidget):
         self.font_slider = self._make_slider("Font size", 6, 20, DEFAULTS['font_size'], "pt")
 
         char_layout = QtWidgets.QHBoxLayout()
-        char_layout.addWidget(QtWidgets.QLabel("Char set:"))
+        char_label = QtWidgets.QLabel("Char set:")
+        char_layout.addWidget(char_label)
         self.char_combo = QtWidgets.QComboBox()
         self.char_combo.addItems(["Detailed", "Newspaper", "Block", "Dot"])
         self.char_combo.setCurrentText(DEFAULTS['char_set'])
@@ -508,10 +802,15 @@ class ControlPanel(QtWidgets.QWidget):
         self.save_txt_btn = QtWidgets.QPushButton("📄 Save TXT")
         self.copy_btn = QtWidgets.QPushButton("📋 Copy text")
         self.fullscreen_btn = QtWidgets.QPushButton("⛶ Fullscreen")
+        self.theme_btn = QtWidgets.QPushButton("🌓")
+        self.theme_btn.setFixedWidth(40)
+        self.theme_btn.setToolTip("Theme: Auto → Dark → Light")
+        
         btn_layout.addWidget(self.save_img_btn)
         btn_layout.addWidget(self.save_txt_btn)
         btn_layout.addWidget(self.copy_btn)
         btn_layout.addWidget(self.fullscreen_btn)
+        btn_layout.addWidget(self.theme_btn)
 
         layout.addLayout(self.width_slider['layout'])
         layout.addLayout(self.height_slider['layout'])
@@ -536,6 +835,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.save_txt_btn.clicked.connect(self.save_txt)
         self.copy_btn.clicked.connect(self.copy_text)
         self.fullscreen_btn.clicked.connect(self.fullscreen_requested)
+        self.theme_btn.clicked.connect(self.theme_requested)
 
     def _make_slider(self, name, min_v, max_v, default, suffix="", factor=1):
         slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
@@ -544,15 +844,16 @@ class ControlPanel(QtWidgets.QWidget):
         slider.setValue(int(default * factor))
         slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
 
-        label = QtWidgets.QLabel(f"{default}{suffix}")
-        slider.valueChanged.connect(lambda v: label.setText(f"{v/factor:.1f}{suffix}"))
+        label_name = QtWidgets.QLabel(name + ":")
+        label_val = QtWidgets.QLabel(f"{default}{suffix}")
+        slider.valueChanged.connect(lambda v: label_val.setText(f"{v/factor:.1f}{suffix}"))
 
         layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(name + ":"))
+        layout.addWidget(label_name)
         layout.addWidget(slider)
-        layout.addWidget(label)
+        layout.addWidget(label_val)
 
-        return {'slider': slider, 'label': label, 'layout': layout, 'factor': factor}
+        return {'slider': slider, 'label': label_val, 'layout': layout, 'factor': factor}
 
     def _emit_params(self):
         w = self.width_slider['slider'].value()
@@ -565,15 +866,23 @@ class ControlPanel(QtWidgets.QWidget):
         char_set = self.char_combo.currentText()
         self.params_changed.emit(w, h, contrast, font, use_color, invert, auto_contrast, char_set)
 
+    def update_theme_button(self, mode):
+        theme_manager = ThemeManager()
+        self.theme_btn.setText(theme_manager.get_icon_for_mode(mode))
+
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
+        self.theme_manager = ThemeManager()
+        self.theme_manager.apply_current_theme()
+
         self.setWindowTitle("📺 ASCII Camera Pro")
         self.resize(800, 600)
 
         self.camera_widget = ASCIICameraWidget()
         self.control_panel = ControlPanel()
+        self.control_panel.update_theme_button(self.theme_manager._current_mode)
 
         self.status_label = QtWidgets.QLabel("FPS: 0.0 | ASCII: ?×? | Mode: —")
         self.statusBar().addWidget(self.status_label)
@@ -596,6 +905,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.control_panel.save_txt.connect(self.save_txt)
         self.control_panel.copy_text.connect(self.copy_text)
         self.control_panel.fullscreen_requested.connect(self.toggle_fullscreen)
+        self.control_panel.theme_requested.connect(self.cycle_theme)
+
+        self.theme_manager.theme_changed.connect(self.on_theme_changed)
 
         self.status_timer = QtCore.QTimer()
         self.status_timer.timeout.connect(self.update_status)
@@ -609,6 +921,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.shortcut_fullscreen.activated.connect(self.toggle_fullscreen)
         self.shortcut_save_img = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), self)
         self.shortcut_save_img.activated.connect(self.save_image_dialog)
+        self.shortcut_theme = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+T"), self)
+        self.shortcut_theme.activated.connect(self.cycle_theme)
+
+    def on_theme_changed(self, mode):
+        self.control_panel.update_theme_button(mode)
+
+    def cycle_theme(self):
+        self.theme_manager.cycle_mode()
 
     def on_params_changed(self, w, h, contrast, font_size, use_color, invert, auto_contrast, char_set_name):
         self.camera_widget.update_params(
@@ -620,7 +940,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def check_orientation(self):
         screen = self.screen()
         geo = screen.geometry()
-        w, h = geo.width(), geo.geometry().height()
+        w, h = geo.width(), geo.height()
         is_landscape = w > h
         target_ratio = 2.0 if is_landscape else 1.4
         new_h = min(45, max(20, self.camera_widget.params['ascii_h']))
@@ -667,10 +987,13 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "⚠️ Empty", "No frame available.")
 
     def _show_save_result(self, success, fmt, path):
-        if success:
+        if success and path:
             QtWidgets.QMessageBox.information(self, f"✅ {fmt} Saved", f"Saved to:\n{path}")
         else:
-            QtWidgets.QMessageBox.critical(self, f"❌ {fmt} Error", f"Failed to save {fmt} file!")
+            QtWidgets.QMessageBox.critical(
+                self, f"❌ {fmt} Error",
+                f"Failed to save {fmt} file!\nPath: {path or 'unknown'}"
+            )
 
     def toggle_fullscreen(self):
         if self.isFullScreen():
@@ -691,18 +1014,8 @@ if __name__ == "__main__":
     app.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)
     app.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps)
 
-    app.setStyle("Fusion")
-    palette = app.palette()
-    palette.setColor(QtGui.QPalette.Window, QtGui.QColor(25, 25, 25))
-    palette.setColor(QtGui.QPalette.WindowText, QtCore.Qt.white)
-    palette.setColor(QtGui.QPalette.Button, QtGui.QColor(50, 50, 50))
-    palette.setColor(QtGui.QPalette.ButtonText, QtCore.Qt.white)
-    palette.setColor(QtGui.QPalette.Base, QtGui.QColor(20, 20, 20))
-    palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(35, 35, 35))
-    app.setPalette(palette)
-
-    font = app.font()
-    font.setPointSize(9)
+    font = QtGui.QFont()
+    font.setStyleHint(QtGui.QFont.SansSerif)
     app.setFont(font)
 
     window = MainWindow()
