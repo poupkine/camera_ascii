@@ -22,17 +22,20 @@ CHAR_SETS = {
     "Dot": ".",
     "LightSmooth": " _.,:;i1tfLCG08@",  # ← НОВЫЙ: 16 символов, равномерная плотность
 }
+
+# ✅ ИСПРАВЛЕНО: ключи теперь ЕДИНООБРАЗНЫ — 'ascii_w', 'ascii_h', 'char_set_name'
 DEFAULTS = {
-    'width': 80,          # ↑ увеличено для чёткости
-    'height': 44,         # = 80 * 0.55 → идеальное соотношение для Courier New
+    'ascii_w': 80,          # ← было 'width'
+    'ascii_h': 44,          # ← было 'height'
     'contrast': 1.3,
     'font_size': 10,
     'use_color': True,
     'invert': False,
-    'auto_contrast': True,  # ↑ включено по умолчанию для деталей
-    'char_set': "LightSmooth",  # ← рекомендуемый по умолчанию
-    'lock_aspect': True,   # ← новая опция: привязка H к W
+    'auto_contrast': True,
+    'char_set_name': "LightSmooth",
+    'lock_aspect': True,
 }
+
 CAMERA_WIDTH, CAMERA_HEIGHT = 640, 480
 
 # ✅ Рабочий путь для Pydroid 3 и кросс-платформенный fallback
@@ -58,8 +61,8 @@ elif sys.platform == "linux" and "ANDROID_ROOT" in os.environ:
         SAVE_DIR = os.path.expanduser("~/ASCII_Camera/")
 else:
     SAVE_DIR = os.path.expanduser("~/ASCII_Camera/")
-
 # ===============================================================
+
 
 class ThemeManager(QtCore.QObject):
     theme_changed = QtCore.Signal(str)
@@ -337,6 +340,7 @@ class ThemeManager(QtCore.QObject):
 
 # ───────────────────────────────────────────────────────────────
 
+
 class ASCIIRenderer:
     def __init__(self):
         self.chars = None
@@ -374,11 +378,14 @@ class ASCIIRenderer:
 
 # ───────────────────────────────────────────────────────────────
 
+
 class ASCIICameraWidget(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.renderer = ASCIIRenderer()
-        self.renderer.set_chars(CHAR_SETS[DEFAULTS['char_set']])
+        # ✅ ИСПРАВЛЕНО: используем 'char_set_name' из DEFAULTS
+        self.renderer.set_chars(CHAR_SETS[DEFAULTS['char_set_name']])
+        # ✅ ИСПРАВЛЕНО: копируем DEFAULTS с правильными ключами
         self.params = {k: v for k, v in DEFAULTS.items()}
         self.char_w = 8
         self.line_h = 14
@@ -401,11 +408,6 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                       ascii_w=None, ascii_h=None, contrast=None,
                       font_size=None, use_color=None, invert=None,
                       auto_contrast=None, char_set_name=None, lock_aspect=None):
-        # Сохраняем текущее состояние
-        old_w = self.params['ascii_w']
-        old_h = self.params['ascii_h']
-        old_lock = self.params['lock_aspect']
-
         changed = False
         redraw_needed = False
 
@@ -441,13 +443,10 @@ class ASCIICameraWidget(QtWidgets.QWidget):
 
         # 🔑 АВТОМАТИЧЕСКАЯ КОРРЕКЦИЯ ВЫСОТЫ ПРИ LOCK
         if self.params['lock_aspect'] and changed:
-            # Фиксированное соотношение для Courier New: H = W * 0.55
             ideal_h = int(self.params['ascii_w'] * 0.55)
-            # Округляем до ближайшего чётного / кратного 2 для плавности
             ideal_h = max(10, min(70, ideal_h))
             if self.params['ascii_h'] != ideal_h:
                 self.params['ascii_h'] = ideal_h
-                # Отправим сигнал в ControlPanel для синхронизации слайдера
                 if hasattr(self, '_notify_height_change'):
                     self._notify_height_change(ideal_h)
 
@@ -466,8 +465,6 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         font = QtGui.QFont("Courier New", self.params['font_size'])
         fm = QtGui.QFontMetrics(font)
         self.char_w = fm.horizontalAdvance("W") or 8
-        # Для точности: учитываем реальное соотношение W/H символа
-        # В большинстве систем: char_w ≈ 8, line_h ≈ 14 → ratio ≈ 0.57
         self.line_h = fm.height() + 2
         self.update()
 
@@ -576,7 +573,6 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         try:
             pdf = FPDF(unit="mm", format="A4")
             pdf.add_page()
-            # Точная настройка под Courier New: 2.1 мм на символ по X, 3.5 мм по Y
             mm_per_char_x = 2.1
             mm_per_char_y = 3.5
             content_w = self.params['ascii_w'] * mm_per_char_x
@@ -613,7 +609,6 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                         r, g, b = 255 - r, 255 - g, 255 - b
                     pdf.set_text_color(r, g, b)
                     pdf.text(x0 + x * mm_per_char_x, y0 + y * mm_per_char_y + 3, ch)
-            # ✅ Прямая запись — в Pydroid 3 работает в ~/ и Download/
             pdf.output(full_path)
             return True
         except Exception as e:
@@ -646,10 +641,7 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                 painter.scale(scale, scale)
                 self._render_to_painter(painter, scale=1.0)
                 painter.end()
-                if fmt == "png":
-                    success = img.save(full_path, "PNG")
-                else:
-                    success = img.save(full_path, "JPG", quality=quality)
+                success = img.save(full_path, "PNG" if fmt == "png" else "JPG", quality=quality)
                 return bool(success), full_path
             else:
                 return False, full_path
@@ -691,6 +683,7 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         super().closeEvent(event)
 
 # ───────────────────────────────────────────────────────────────
+
 
 class SaveDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
@@ -744,6 +737,7 @@ class SaveDialog(QtWidgets.QDialog):
 
 # ───────────────────────────────────────────────────────────────
 
+
 class ControlPanel(QtWidgets.QWidget):
     params_changed = QtCore.Signal(int, int, float, int, bool, bool, bool, str, bool)
     save_image = QtCore.Signal()
@@ -762,10 +756,9 @@ class ControlPanel(QtWidgets.QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
 
-        self.width_slider = self._make_slider("Width", 20, 120, DEFAULTS['width'], "chars")
-        self.height_slider = self._make_slider("Height", 10, 70, DEFAULTS['height'], "chars")
+        self.width_slider = self._make_slider("Width", 20, 120, DEFAULTS['ascii_w'], "chars")
+        self.height_slider = self._make_slider("Height", 10, 70, DEFAULTS['ascii_h'], "chars")
 
-        # 🔑 Новая кнопка: Lock Aspect Ratio
         self.aspect_lock_cb = QtWidgets.QCheckBox("🔒 Lock H = W × 0.55")
         self.aspect_lock_cb.setChecked(DEFAULTS['lock_aspect'])
         self.aspect_lock_cb.stateChanged.connect(self._on_aspect_lock_changed)
@@ -778,7 +771,7 @@ class ControlPanel(QtWidgets.QWidget):
         char_layout.addWidget(char_label)
         self.char_combo = QtWidgets.QComboBox()
         self.char_combo.addItems(list(CHAR_SETS.keys()))
-        self.char_combo.setCurrentText(DEFAULTS['char_set'])
+        self.char_combo.setCurrentText(DEFAULTS['char_set_name'])
         char_layout.addWidget(self.char_combo)
         char_layout.addStretch()
 
@@ -811,7 +804,7 @@ class ControlPanel(QtWidgets.QWidget):
 
         layout.addLayout(self.width_slider['layout'])
         layout.addLayout(self.height_slider['layout'])
-        layout.addWidget(self.aspect_lock_cb)  # ← добавлена кнопка
+        layout.addWidget(self.aspect_lock_cb)
         layout.addLayout(self.contrast_slider['layout'])
         layout.addLayout(self.font_slider['layout'])
         layout.addLayout(char_layout)
@@ -842,7 +835,7 @@ class ControlPanel(QtWidgets.QWidget):
         slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
         label_name = QtWidgets.QLabel(name + ":")
         label_val = QtWidgets.QLabel(f"{default}{suffix}")
-        slider.valueChanged.connect(lambda v: label_val.setText(f"{v/factor:.1f}{suffix}"))
+        slider.valueChanged.connect(lambda v: label_val.setText(f"{v / factor:.1f}{suffix}"))
         layout = QtWidgets.QHBoxLayout()
         layout.addWidget(label_name)
         layout.addWidget(slider)
@@ -904,6 +897,7 @@ class ControlPanel(QtWidgets.QWidget):
 
 # ───────────────────────────────────────────────────────────────
 
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -916,7 +910,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.control_panel = ControlPanel()
         self.control_panel.update_theme_button(self.theme_manager._current_mode)
 
-        # Подключаем синхронизацию высоты ↔ ширины
         self.camera_widget.set_notify_height_callback(self.control_panel.sync_height)
         self.camera_widget.set_notify_width_callback(self.control_panel.sync_width)
 
@@ -975,7 +968,6 @@ class MainWindow(QtWidgets.QMainWindow):
         geo = screen.geometry()
         w, h = geo.width(), geo.height()
         is_landscape = w > h
-        # 🔑 Используем корректное соотношение 1.0 / 0.55 ≈ 1.82
         target_ratio = 1.82 if is_landscape else 1.0
         new_h = min(45, max(20, self.camera_widget.params['ascii_h']))
         new_w = int(new_h * target_ratio)
@@ -987,8 +979,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def update_status(self):
         mode = self.camera_widget.params['char_set_name']
-        w = self.camera_widget.params['ascii_w']
-        h = self.camera_widget.params['ascii_h']
+        w = self.camera_widget.params['ascii_w']   # ✅ Теперь безопасно
+        h = self.camera_widget.params['ascii_h']   # ✅
         lock = "🔒" if self.camera_widget.params['lock_aspect'] else "🔓"
         self.status_label.setText(f"FPS: {self.camera_widget.fps:.1f} | ASCII: {w}×{h} {lock} | Mode: {mode}")
 
@@ -1047,6 +1039,7 @@ class MainWindow(QtWidgets.QMainWindow):
         super().closeEvent(event)
 
 # ───────────────────────────────────────────────────────────────
+
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
