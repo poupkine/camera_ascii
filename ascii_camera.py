@@ -1,11 +1,19 @@
 import sys
 import os
 import time
+import datetime
 import cv2
 import numpy as np
 from PIL import Image
 
 from PySide6 import QtCore, QtWidgets, QtGui
+
+# Для PDF — чисто Python, работает на Android
+try:
+    from fpdf import FPDF, FontFace
+except ImportError:
+    # Если не установлен — покажем ошибку при попытке сохранить PDF
+    FPDF = None
 
 
 # ══════════════════════════════════════════════════════════════
@@ -28,8 +36,7 @@ DEFAULTS = {
 }
 
 CAMERA_WIDTH, CAMERA_HEIGHT = 640, 480
-SAVE_PATH_PNG = "/storage/emulated/0/Download/ascii_camera.png"
-SAVE_PATH_TXT = "/storage/emulated/0/Download/ascii_camera.txt"
+SAVE_DIR = "/storage/emulated/0/Download/ASCII_Camera/"
 # ===============================================================
 
 
@@ -78,7 +85,6 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         self.renderer = ASCIIRenderer()
         self.renderer.set_chars(CHAR_SETS[DEFAULTS['char_set']])
 
-        # ВСЕ параметры хранятся ВНУТРИ и обновляются напрямую
         self.params = {
             'ascii_w': DEFAULTS['width'],
             'ascii_h': DEFAULTS['height'],
@@ -114,7 +120,6 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                       ascii_w=None, ascii_h=None, contrast=None,
                       font_size=None, use_color=None, invert=None,
                       auto_contrast=None, char_set_name=None):
-        # Обновляем параметры поименно
         changed = False
         redraw_needed = False
 
@@ -147,12 +152,8 @@ class ASCIICameraWidget(QtWidgets.QWidget):
 
         if changed:
             self.update_metrics()
-            # Принудительно обновляем кадр в следующем цикле
         if redraw_needed:
-            self.update()  # немедленная перерисовка UI
-
-        # Debug (можно закомментировать)
-        # print("Params updated:", {k: v for k, v in locals().items() if k != 'self' and v is not None})
+            self.update()
 
     def update_metrics(self):
         font = QtGui.QFont("Courier New", self.params['font_size'])
@@ -211,7 +212,6 @@ class ASCIICameraWidget(QtWidgets.QWidget):
 
                 r, g, b = color_arr
 
-                # Dot mode brightness modulation
                 if self.params['char_set_name'] == "Dot":
                     brightness = self.gray[y, x] / 255.0
                     if self.params['invert']:
@@ -233,21 +233,19 @@ class ASCIICameraWidget(QtWidgets.QWidget):
                     ch
                 )
 
-    def save_current_frame_png(self):
+    def _render_to_painter(self, painter, scale=1.0):
         if self.ascii_symbols is None:
-            return False
+            return
 
-        img_w = self.params['ascii_w'] * self.char_w
-        img_h = self.params['ascii_h'] * self.line_h
-        qimg = QtGui.QImage(img_w, img_h, QtGui.QImage.Format_RGB888)
-        qimg.fill(QtCore.Qt.black if not self.params['invert'] else QtCore.Qt.white)
-
-        painter = QtGui.QPainter(qimg)
-        font = QtGui.QFont("Courier New", self.params['font_size'])
+        font = QtGui.QFont("Courier New", int(self.params['font_size'] * scale))
         painter.setFont(font)
         painter.setRenderHint(QtGui.QPainter.TextAntialiasing, False)
 
         H, W = self.ascii_symbols.shape
+        char_w = self.char_w * scale
+        line_h = self.line_h * scale
+        font_size_scaled = self.params['font_size'] * scale
+
         for y in range(H):
             for x in range(W):
                 ch = self.ascii_symbols[y, x]
@@ -276,32 +274,127 @@ class ASCIICameraWidget(QtWidgets.QWidget):
 
                 painter.setPen(QtGui.QColor(r, g, b))
                 painter.drawText(
-                    x * self.char_w,
-                    y * self.line_h + self.params['font_size'],
+                    x * char_w,
+                    y * line_h + font_size_scaled,
                     ch
                 )
-        painter.end()
 
-        os.makedirs(os.path.dirname(SAVE_PATH_PNG), exist_ok=True)
-        return qimg.save(SAVE_PATH_PNG, "PNG")
+    def save_frame(self, fmt="png", quality=95, scale=2):
+        if self.ascii_symbols is None:
+            return False, ""
+
+        timestamp = datetime.datetime.now().strftime("%d%m%Y_%H%M%S")
+        filename = f"ascii_{timestamp}.{fmt}"
+        full_path = os.path.join(SAVE_DIR, filename)
+        os.makedirs(SAVE_DIR, exist_ok=True)
+
+        w_px = int(self.params['ascii_w'] * self.char_w * scale)
+        h_px = int(self.params['ascii_h'] * self.line_h * scale)
+
+        try:
+            if fmt == "pdf":
+                if FPDF is None:
+                    raise RuntimeError("fpdf2 is not installed. Run: pip install fpdf2")
+
+                # ✅ Новый PDF через fpdf2
+                pdf = FPDF(unit="pt", format=(w_px, h_px))
+                pdf.add_page()
+                pdf.set_auto_page_break(False)
+
+                # Courier — моноширинный, встроен в fpdf2
+                pdf.set_font("Courier", size=self.params['font_size'] * scale)
+
+                H, W = self.ascii_symbols.shape
+                char_w_pt = self.char_w * scale
+                line_h_pt = self.line_h * scale
+                font_size_pt = self.params['font_size'] * scale
+
+                # Белый/чёрный фон
+                bg = (255, 255, 255) if self.params['invert'] else (0, 0, 0)
+                pdf.set_fill_color(*bg)
+                pdf.rect(0, 0, w_px, h_px, "F")
+
+                for y in range(H):
+                    for x in range(W):
+                        ch = self.ascii_symbols[y, x]
+                        if ch == "":  # защита
+                            continue
+
+                        if self.params['use_color']:
+                            color_arr = self.colors[y, x]
+                        else:
+                            val = int(self.gray[y, x])
+                            color_arr = (val, val, val)
+
+                        r, g, b = color_arr
+
+                        if self.params['char_set_name'] == "Dot":
+                            brightness = self.gray[y, x] / 255.0
+                            if self.params['invert']:
+                                r = int(r * (1 - brightness) + 255 * brightness)
+                                g = int(g * (1 - brightness) + 255 * brightness)
+                                b = int(b * (1 - brightness) + 255 * brightness)
+                            else:
+                                r = int(r * brightness)
+                                g = int(g * brightness)
+                                b = int(b * brightness)
+
+                        if self.params['invert']:
+                            r, g, b = 255 - r, 255 - g, 255 - b
+
+                        pdf.set_text_color(r, g, b)
+                        # Позиция: x, y — в pt
+                        x_pos = x * char_w_pt
+                        y_pos = y * line_h_pt + font_size_pt * 0.8  # подбор базовой линии
+                        pdf.text(x_pos, y_pos, ch)
+
+                pdf.output(full_path)
+                return True, full_path
+
+            elif fmt in ("png", "jpg"):
+                img = QtGui.QImage(w_px, h_px, QtGui.QImage.Format_RGB888)
+                bg = QtCore.Qt.black if not self.params['invert'] else QtCore.Qt.white
+                img.fill(bg)
+
+                painter = QtGui.QPainter(img)
+                painter.scale(scale, scale)
+                self._render_to_painter(painter, scale=1.0)
+                painter.end()
+
+                if fmt == "png":
+                    success = img.save(full_path, "PNG")
+                else:
+                    success = img.save(full_path, "JPG", quality)
+                return success, full_path
+
+            else:
+                return False, ""
+
+        except Exception as e:
+            print(f"Save error ({fmt}):", e)
+            return False, ""
 
     def save_current_frame_txt(self):
         if self.ascii_symbols is None:
-            return False
+            return False, ""
+
+        timestamp = datetime.datetime.now().strftime("%d%m%Y_%H%M%S")
+        filename = f"ascii_{timestamp}.txt"
+        full_path = os.path.join(SAVE_DIR, filename)
 
         lines = []
         for row in self.ascii_symbols:
             lines.append("".join(row))
         text = "\n".join(lines)
 
-        os.makedirs(os.path.dirname(SAVE_PATH_TXT), exist_ok=True)
+        os.makedirs(SAVE_DIR, exist_ok=True)
         try:
-            with open(SAVE_PATH_TXT, "w", encoding="utf-8") as f:
+            with open(full_path, "w", encoding="utf-8") as f:
                 f.write(text)
-            return True
+            return True, full_path
         except Exception as e:
             print("TXT save error:", e)
-            return False
+            return False, ""
 
     def get_text_ascii(self):
         if self.ascii_symbols is None:
@@ -315,12 +408,62 @@ class ASCIICameraWidget(QtWidgets.QWidget):
         super().closeEvent(event)
 
 
-class ControlPanel(QtWidgets.QWidget):
-    params_changed = QtCore.Signal(
-        int, int, float, int, bool, bool, bool, str
-    )  # ascii_w, ascii_h, contrast, font_size, use_color, invert, auto_contrast, char_set_name
+class SaveDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("💾 Save As")
+        self.setModal(True)
+        self.init_ui()
 
-    save_png = QtCore.Signal()
+    def init_ui(self):
+        layout = QtWidgets.QVBoxLayout()
+
+        fmt_layout = QtWidgets.QHBoxLayout()
+        fmt_layout.addWidget(QtWidgets.QLabel("Format:"))
+        self.radio_png = QtWidgets.QRadioButton("PNG (lossless)")
+        self.radio_jpg = QtWidgets.QRadioButton("JPEG (95% quality)")
+        self.radio_pdf = QtWidgets.QRadioButton("PDF (vector, fpdf2)")
+        self.radio_png.setChecked(True)
+        fmt_layout.addWidget(self.radio_png)
+        fmt_layout.addWidget(self.radio_jpg)
+        fmt_layout.addWidget(self.radio_pdf)
+        layout.addLayout(fmt_layout)
+
+        scale_layout = QtWidgets.QHBoxLayout()
+        scale_layout.addWidget(QtWidgets.QLabel("HD Scale:"))
+        self.scale_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.scale_slider.setRange(1, 4)
+        self.scale_slider.setValue(2)
+        self.scale_label = QtWidgets.QLabel("2×")
+        self.scale_slider.valueChanged.connect(lambda v: self.scale_label.setText(f"{v}×"))
+        scale_layout.addWidget(self.scale_slider)
+        scale_layout.addWidget(self.scale_label)
+        layout.addLayout(scale_layout)
+
+        btn_layout = QtWidgets.QHBoxLayout()
+        self.ok_btn = QtWidgets.QPushButton("✅ Save")
+        self.cancel_btn = QtWidgets.QPushButton("❌ Cancel")
+        self.ok_btn.clicked.connect(self.accept)
+        self.cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(self.ok_btn)
+        btn_layout.addWidget(self.cancel_btn)
+        layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
+
+    def get_settings(self):
+        if self.radio_png.isChecked():
+            fmt = "png"
+        elif self.radio_jpg.isChecked():
+            fmt = "jpg"
+        else:
+            fmt = "pdf"
+        return {'format': fmt, 'scale': self.scale_slider.value()}
+
+
+class ControlPanel(QtWidgets.QWidget):
+    params_changed = QtCore.Signal(int, int, float, int, bool, bool, bool, str)
+    save_image = QtCore.Signal()
     save_txt = QtCore.Signal()
     copy_text = QtCore.Signal()
     fullscreen_requested = QtCore.Signal()
@@ -361,11 +504,11 @@ class ControlPanel(QtWidgets.QWidget):
         toggle_layout.addStretch()
 
         btn_layout = QtWidgets.QHBoxLayout()
-        self.save_png_btn = QtWidgets.QPushButton("💾 Save PNG")
+        self.save_img_btn = QtWidgets.QPushButton("💾 Save Image...")
         self.save_txt_btn = QtWidgets.QPushButton("📄 Save TXT")
         self.copy_btn = QtWidgets.QPushButton("📋 Copy text")
         self.fullscreen_btn = QtWidgets.QPushButton("⛶ Fullscreen")
-        btn_layout.addWidget(self.save_png_btn)
+        btn_layout.addWidget(self.save_img_btn)
         btn_layout.addWidget(self.save_txt_btn)
         btn_layout.addWidget(self.copy_btn)
         btn_layout.addWidget(self.fullscreen_btn)
@@ -380,7 +523,6 @@ class ControlPanel(QtWidgets.QWidget):
 
         self.setLayout(layout)
 
-        # 🔥 КРИТИЧЕСКИ ВАЖНО: подключаем КАЖДОЕ изменение ОТДЕЛЬНО
         self.width_slider['slider'].valueChanged.connect(self._emit_params)
         self.height_slider['slider'].valueChanged.connect(self._emit_params)
         self.contrast_slider['slider'].valueChanged.connect(self._emit_params)
@@ -390,7 +532,7 @@ class ControlPanel(QtWidgets.QWidget):
         self.invert_cb.stateChanged.connect(self._emit_params)
         self.auto_contrast_cb.stateChanged.connect(self._emit_params)
 
-        self.save_png_btn.clicked.connect(self.save_png)
+        self.save_img_btn.clicked.connect(self.save_image)
         self.save_txt_btn.clicked.connect(self.save_txt)
         self.copy_btn.clicked.connect(self.copy_text)
         self.fullscreen_btn.clicked.connect(self.fullscreen_requested)
@@ -413,7 +555,6 @@ class ControlPanel(QtWidgets.QWidget):
         return {'slider': slider, 'label': label, 'layout': layout, 'factor': factor}
 
     def _emit_params(self):
-        """Emit all current values as separate args (robust for Android)"""
         w = self.width_slider['slider'].value()
         h = self.height_slider['slider'].value()
         contrast = self.contrast_slider['slider'].value() / 100.0
@@ -422,7 +563,6 @@ class ControlPanel(QtWidgets.QWidget):
         invert = self.invert_cb.isChecked()
         auto_contrast = self.auto_contrast_cb.isChecked()
         char_set = self.char_combo.currentText()
-
         self.params_changed.emit(w, h, contrast, font, use_color, invert, auto_contrast, char_set)
 
 
@@ -435,7 +575,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.camera_widget = ASCIICameraWidget()
         self.control_panel = ControlPanel()
 
-        self.status_label = QtWidgets.QLabel("FPS: 0.0 | Camera: ?×? | Mode: —")
+        self.status_label = QtWidgets.QLabel("FPS: 0.0 | ASCII: ?×? | Mode: —")
         self.statusBar().addWidget(self.status_label)
 
         central = QtWidgets.QWidget()
@@ -451,13 +591,8 @@ class MainWindow(QtWidgets.QMainWindow):
         central.setLayout(layout)
         self.setCentralWidget(central)
 
-        # 🔥 ПРАВИЛЬНОЕ ПОДКЛЮЧЕНИЕ СЛОТА:
-        self.control_panel.params_changed.connect(
-            self.on_params_changed,
-            type=QtCore.Qt.DirectConnection  # ← гарантирует мгновенное выполнение на Android
-        )
-
-        self.control_panel.save_png.connect(self.save_png)
+        self.control_panel.params_changed.connect(self.on_params_changed, type=QtCore.Qt.DirectConnection)
+        self.control_panel.save_image.connect(self.save_image_dialog)
         self.control_panel.save_txt.connect(self.save_txt)
         self.control_panel.copy_text.connect(self.copy_text)
         self.control_panel.fullscreen_requested.connect(self.toggle_fullscreen)
@@ -472,58 +607,55 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.shortcut_fullscreen = QtGui.QShortcut(QtGui.QKeySequence("F11"), self)
         self.shortcut_fullscreen.activated.connect(self.toggle_fullscreen)
-        self.shortcut_save_png = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+P"), self)
-        self.shortcut_save_png.activated.connect(self.save_png)
-        self.shortcut_save_txt = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+T"), self)
-        self.shortcut_save_txt.activated.connect(self.save_txt)
+        self.shortcut_save_img = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), self)
+        self.shortcut_save_img.activated.connect(self.save_image_dialog)
 
     def on_params_changed(self, w, h, contrast, font_size, use_color, invert, auto_contrast, char_set_name):
-        """Direct slot — no dict unpacking issues"""
         self.camera_widget.update_params(
-            ascii_w=w,
-            ascii_h=h,
-            contrast=contrast,
-            font_size=font_size,
-            use_color=use_color,
-            invert=invert,
-            auto_contrast=auto_contrast,
+            ascii_w=w, ascii_h=h, contrast=contrast, font_size=font_size,
+            use_color=use_color, invert=invert, auto_contrast=auto_contrast,
             char_set_name=char_set_name
         )
 
     def check_orientation(self):
         screen = self.screen()
         geo = screen.geometry()
-        w, h = geo.width(), geo.height()
+        w, h = geo.width(), geo.geometry().height()
         is_landscape = w > h
-
         target_ratio = 2.0 if is_landscape else 1.4
         new_h = min(45, max(20, self.camera_widget.params['ascii_h']))
         new_w = int(new_h * target_ratio)
         new_w = max(20, min(120, new_w))
-
         if abs(new_w - self.camera_widget.params['ascii_w']) > 5 or abs(new_h - self.camera_widget.params['ascii_h']) > 3:
             self.camera_widget.update_params(ascii_w=new_w, ascii_h=new_h)
             self.control_panel.width_slider['slider'].setValue(new_w)
             self.control_panel.height_slider['slider'].setValue(new_h)
 
     def update_status(self):
-        w, h = -1, -1
-        if self.camera_widget.cap.isOpened():
-            w = int(self.camera_widget.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(self.camera_widget.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         mode = self.camera_widget.params['char_set_name']
-        self.status_label.setText(
-            f"FPS: {self.camera_widget.fps:.1f} | ASCII: {self.camera_widget.params['ascii_w']}×{self.camera_widget.params['ascii_h']} | "
-            f"Camera: {w}×{h} | Mode: {mode}"
-        )
+        w = self.camera_widget.params['ascii_w']
+        h = self.camera_widget.params['ascii_h']
+        self.status_label.setText(f"FPS: {self.camera_widget.fps:.1f} | ASCII: {w}×{h} | Mode: {mode}")
 
-    def save_png(self):
-        success = self.camera_widget.save_current_frame_png()
-        self._show_save_result(success, "PNG", SAVE_PATH_PNG)
+    def save_image_dialog(self):
+        dialog = SaveDialog(self)
+        if dialog.exec() == QtWidgets.QDialog.Accepted:
+            settings = dialog.get_settings()
+            if settings['format'] == 'pdf' and FPDF is None:
+                QtWidgets.QMessageBox.critical(
+                    self, "❌ fpdf2 missing",
+                    "Install fpdf2:\nSettings → Pip → Search 'fpdf2' → Install"
+                )
+                return
+            success, path = self.camera_widget.save_frame(
+                fmt=settings['format'],
+                scale=settings['scale']
+            )
+            self._show_save_result(success, settings['format'].upper(), path)
 
     def save_txt(self):
-        success = self.camera_widget.save_current_frame_txt()
-        self._show_save_result(success, "TXT", SAVE_PATH_TXT)
+        success, path = self.camera_widget.save_current_frame_txt()
+        self._show_save_result(success, "TXT", path)
 
     def copy_text(self):
         text = self.camera_widget.get_text_ascii()
@@ -569,7 +701,6 @@ if __name__ == "__main__":
     palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(35, 35, 35))
     app.setPalette(palette)
 
-    # Force high-DPI font smoothing (helps on Android)
     font = app.font()
     font.setPointSize(9)
     app.setFont(font)
