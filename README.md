@@ -15,6 +15,7 @@ A real-time **ASCII art camera** for Android (via Pydroid 3) and desktop. Render
   - `Detailed`: 27-character set for smooth gradients
   - `Newspaper`: 8-character set for high-contrast print-style
   - `Block`: Unicode blocks (`█▒░ `) for bold, pixel-art look
+  - `Dot`: Unicode dots (`.`) for dot look
 - 📲 **Android-ready** (tested on Pydroid 3)
 - 🖥️ **Desktop compatible** (Windows, Linux, macOS)
 - 🎚️ Real-time controls:
